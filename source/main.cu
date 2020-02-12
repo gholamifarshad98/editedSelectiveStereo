@@ -17,19 +17,19 @@
 #include<string> 
 #include<math.h>
 #include<fstream>
-
-
 #include<cuda.h>
 #include <device_functions.h>
-
-
 #include <time.h>
-
 #include<stdio.h>
 #include<iostream> 
 #include<algorithm>
+
+
+
 using namespace std;
 using namespace cv;
+
+
 int numOfColumnsResized;
 int numOfRowsResized = 0;
 int kernelSize = 16;
@@ -80,18 +80,15 @@ __global__ void IDAS_Stereo_selective( int MxDisparity, int nC , int nSelected, 
 	resultIm[((blockIdx.y + int(kSize / 2))* nC + (blockIdx.x + MxDisparity+ int(kSize / 2)+2))*3+ blockIdx.z] = costs;
 	
 }
-
-
-
-
-void ReadBothImages(shared_ptr<Mat> leftImage, shared_ptr<Mat> rightImage) {
+void ReadBothImages(shared_ptr<Mat> leftImage, shared_ptr<Mat> rightImage,int* numOfRows,int* numOfColumns) {
 
 	try {
-		cout << "this is test" << endl;
+		//cout << "this is test" << endl;
 		*rightImage = cv::imread("2.png", IMREAD_GRAYSCALE);   // Read the right image
 																  //rightImage->convertTo(*rightImage, CV_64F);
 		*leftImage = cv::imread("1.png", IMREAD_GRAYSCALE);   // Read the left image
-																 //leftImage->convertTo(*leftImage, CV_64F);
+		*numOfColumns = ((int)leftImage->cols / 32) * 32;
+		*numOfRows = ((int)leftImage->rows / 32) * 32;													 //leftImage->convertTo(*leftImage, CV_64F);
 	}
 	catch (char* error) {
 		cout << "can not load the " << error << " iamge" << endl;
@@ -107,12 +104,9 @@ void ReadBothImages(shared_ptr<Mat> leftImage, shared_ptr<Mat> rightImage) {
 }
 int CalcCost(shared_ptr<Mat> leftImage_, shared_ptr<Mat> rightImage_, int row, int column, int kernelSize, int disparity, int NCols) {
 	int cost = 0;
+	
 	for (int u = -int(kernelSize / 2); u <= int(kernelSize / 2); u++) {
 		for (int v = -int(kernelSize / 2); v <= int(kernelSize / 2); v++) {
-			int temp1 = row + u;
-			int temp2 = column + v;
-			int temp3 = row + u + disparity;
-			int temp4 = column + v;
 			// for error handeling.
 			if (column + u + disparity >= NCols) {
 				cout << "*****************************************************" << endl;
@@ -150,6 +144,34 @@ void  SSDstereo(shared_ptr<Mat> leftImage_, shared_ptr<Mat> rightImage_, shared_
 
 int main(void)
 {
+	//=======================================================================================================================================
+	//Memeory Alocation
+	//=======================================================================================================================================
+	chrono::high_resolution_clock::time_point startTimeReadImage;
+	chrono::high_resolution_clock::time_point stopTimeReadImage;
+	std::chrono::duration<double, std::milli> durationReadImage;
+
+	chrono::high_resolution_clock::time_point startConvertTo1D;
+	chrono::high_resolution_clock::time_point stopConvertTo1D;
+	std::chrono::duration<double, std::milli> durationConvertTo1D;
+
+	chrono::high_resolution_clock::time_point startCudaMemcpyInput;
+	chrono::high_resolution_clock::time_point stopCudaMemcpyInput;
+	std::chrono::duration<double, std::milli> durationCudaMemcpyInput;
+
+	chrono::high_resolution_clock::time_point startCudaCalc;
+	chrono::high_resolution_clock::time_point stopCudaCalc;
+	std::chrono::duration<double, std::milli> durationCudaCalc;
+
+	chrono::high_resolution_clock::time_point startCudaMemcpyResult;
+	chrono::high_resolution_clock::time_point stopCudaMemcpyResult;
+	std::chrono::duration<double, std::milli> durationCudaMemcpyResult;
+
+	chrono::high_resolution_clock::time_point startInferenceResult;
+	chrono::high_resolution_clock::time_point stopInferenceResult;
+	std::chrono::duration<double, std::milli> durationInferenceResult;
+	std::chrono::duration<double, std::milli> totalDuraation;
+
 
 
 	shared_ptr<Mat> rightImage = make_shared<Mat>();
@@ -161,47 +183,86 @@ int main(void)
 	shared_ptr<Mat>  stereoResut = make_shared<Mat>();
 	shared_ptr<Mat>  stereoResutResized = make_shared<Mat>();
 
-//	auto start = chrono::high_resolution_clock::now();
-	ReadBothImages(leftImage, rightImage);
-	//chrono::high_resolution_clock::time_point stop = chrono::high_resolution_clock::now();
-	const int numOfColumns = ((int)leftImage->cols/32)*32;
-	const int numOfRows = ((int)leftImage->rows/32)*32;
-	cout << "numOfRows is " << numOfRows << " and numOfColumns is " << numOfColumns << endl;
- 	stereoResut = make_shared<Mat>(numOfRows, numOfColumns, CV_8UC1);
-	//SSDstereo(leftImage, rightImage, stereoResut, kernelSize, maxDisparity, numOfRows, numOfColumns);
-	//cv::imshow("stereoOutput", *stereoResut);
-	//cv::waitKey(1000);
-
-	//ofstream repotredResult;
-
-	//shared_ptr<Mat> rightGrayImage = make_shared<Mat>(numOfRows, numOfColumns, CV_8UC1);
-	//cv::cvtColor(*rightImage, *rightGrayImage, CV_RGB2BGR);
-	//cv::imshow("gray image", *rightImage);
-	//cv::waitKey(10000);
+	int numOfRows;
+	int numOfColumns;
+	
+	//Object for repoting results in a text file.
+	ofstream repotringResult;
 
 
+	//Varaible for convert 2D images to 1D array of images.
+	uchar** imArray2DL;
+	uchar** imArray2DR;
+	int** imArrary2DR_result;
+	uchar* imArrary1DL;
+	uchar* imArrary1DR;
+	int* imArrary1DR_result;
+	
+	//Varaible for inference the results;
+	int firstCost;
+	int secondCost;
+	int thirdCost;
 
-	uchar** imArray2DL= new uchar* [numOfRows];
-	uchar** imArray2DR = new uchar*[numOfRows];
-	int** imArrary2DR_result= new int*[numOfRows];
+	//Pointers for Memeory Alocation on GPU.
+	uchar* imArray1DL_d;
+	uchar* imArray1DR_d;
+	int* imArray1DResult_d;
+
+
+
+
+	//=======================================================================================================================================
+	//Read Image
+	//=======================================================================================================================================
+	startTimeReadImage  = chrono::high_resolution_clock::now();
+	ReadBothImages(leftImage, rightImage,&numOfRows,&numOfColumns);
+	stopTimeReadImage = chrono::high_resolution_clock::now();
+
+
+
+	
+	
+
+	//=======================================================================================================================================
+	//Dynamic Memeory Alocation 
+	//=======================================================================================================================================
+	stereoResut = make_shared<Mat>(numOfRows, numOfColumns, CV_8UC1);
+	imArray2DL= new uchar* [numOfRows];
+	imArray2DR = new uchar*[numOfRows];
+	imArrary2DR_result= new int*[numOfRows];
 	for (int i = 0; i < numOfRows; i++) {
 		imArray2DL[i] = new uchar[numOfColumns];
 		imArray2DR[i] = new uchar[numOfColumns];
 		imArrary2DR_result[i] = new int[numOfColumns*3];
 	}
-	uchar* imArrary1DL = new uchar[numOfColumns * numOfRows];
-	uchar* imArrary1DR = new uchar[numOfColumns * numOfRows];
-	int* imArrary1DR_result = new int[numOfColumns * numOfRows * 3];
-	int temp;
-	//auto start = chrono::high_resolution_clock::now();
+	imArrary1DL = new uchar[numOfColumns * numOfRows];
+	imArrary1DR = new uchar[numOfColumns * numOfRows];
+	imArrary1DR_result = new int[numOfColumns * numOfRows * 3];
+	
+	
+	cudaMalloc((void**)&imArray1DL_d, numOfColumns * numOfRows * sizeof(uchar));
+	cudaMalloc((void**)&imArray1DR_d, numOfColumns * numOfRows * sizeof(uchar));
+	cudaMalloc((void**)&imArray1DResult_d, numOfColumns * numOfRows * 3 * sizeof(int));
+
+	// Set grid and bolck size.
+	dim3 blocks3D(16, 16, 1);
+	dim3 grid2D(numOfColumns - 2 * (maxDisparity + 1) - (kernelSize - 1), numOfRows - kernelSize - 1, 3);
+
+
+
+
+
+	//=======================================================================================================================================
+	//Convert 2D image To 1D  array.
+	//=======================================================================================================================================
+	startConvertTo1D = chrono::high_resolution_clock::now();
 	for (int j = 0; j < numOfRows; j++) {
 		for (int i = 0; i < numOfColumns; i++) {
 			imArray2DL[j][i] = leftImage->at<uchar>(j, i);
 			imArray2DR[j][i] = rightImage->at<uchar>(j, i);
 		}
 	}
-	//cout << "copy to array is done!!!!!!" << endl;
-
+	
 	for (int i = 0; i < numOfColumns*numOfRows; i++) {
 		imArrary1DL[i] = imArray2DL[int(i / numOfColumns)][i%numOfColumns];
 		imArrary1DR[i] = imArray2DR[int(i / numOfColumns)][i%numOfColumns];
@@ -209,73 +270,133 @@ int main(void)
 			imArrary1DR_result[i + i*k] = 0;
 		}
 	}
-	//chrono::high_resolution_clock::time_point stop = chrono::high_resolution_clock::now();
+	stopConvertTo1D = chrono::high_resolution_clock::now();
 
 
-
-	uchar* imArray1DL_d;
-	uchar* imArray1DR_d;
-	int* imArray1DResult_d;
 
 	
-	cudaMalloc((void**)&imArray1DL_d, numOfColumns*numOfRows * sizeof(uchar));
-	cudaMalloc((void**)&imArray1DR_d, numOfColumns*numOfRows * sizeof(uchar));
-	cudaMalloc((void**)&imArray1DResult_d, numOfColumns*numOfRows*3 * sizeof(int));
-	auto start = chrono::high_resolution_clock::now();
+
+	//=======================================================================================================================================
+	//Copy 1D images to GPU.
+	//=======================================================================================================================================
+	startCudaMemcpyInput = chrono::high_resolution_clock::now();
 	cudaMemcpy(imArray1DL_d, imArrary1DL, numOfColumns*numOfRows * sizeof(uchar), cudaMemcpyHostToDevice);
 	cudaMemcpy(imArray1DR_d, imArrary1DR, numOfColumns*numOfRows * sizeof(uchar), cudaMemcpyHostToDevice);
-	dim3 blocks3D(16, 16,1);
-	dim3 grid2D(numOfColumns-2*(maxDisparity+1)-(kernelSize-1), numOfRows-kernelSize-1,3);
-	//addIntensity <<<(numOfRows*numOfColumns ), 1 >>>(190, imArray1DL_d);
+	stopCudaMemcpyInput = chrono::high_resolution_clock::now();
+	
+
+
+
+	//=======================================================================================================================================
+	//Call kernel to run on GPU.
+	//=======================================================================================================================================
+	startCudaCalc = chrono::high_resolution_clock::now();
 	IDAS_Stereo_selective <<<grid2D, blocks3D >>>(maxDisparity, numOfColumns, selectedDisparity, imArray1DL_d, imArray1DR_d, imArray1DResult_d);
-	//cudaDeviceSynchronize();
+	stopCudaCalc = chrono::high_resolution_clock::now();
+	
+	
+
+
+	//=======================================================================================================================================
+	//Copy 1D result from GPU.
+	//=======================================================================================================================================
+	startCudaMemcpyResult = chrono::high_resolution_clock::now();
 	cudaMemcpy(imArrary1DR_result, imArray1DResult_d, numOfColumns*numOfRows *3* sizeof(int), cudaMemcpyDeviceToHost);
-	//cout << "adding to array is done!!!!!!" << endl;
-	/*for (int i = 0; i < numOfColumns*numOfRows; i++) {
-		imArrary2DR_result[int(i / numOfColumns)][i%numOfColumns] = imArrary1DR_result[i];
-	}*/
-	int alpha=6;
-	int beta = 9;
-	int firstCost;
-	int secondCost;
-	int thirdCost;
+	stopCudaMemcpyResult = chrono::high_resolution_clock::now();
 
 
+
+
+
+	
+	//=======================================================================================================================================
+	//Inference Results.
+	//=======================================================================================================================================
+	startInferenceResult = chrono::high_resolution_clock::now();
 	for (int j = 0; j < numOfRows; j++) {
 		for (int i = 0; i < numOfColumns; i++) {
 			firstCost = imArrary1DR_result[(j * numOfColumns + i)*3];
 			secondCost= imArrary1DR_result[(j * numOfColumns + i)*3+1];
 			thirdCost= imArrary1DR_result[(j * numOfColumns + i )* 3+2];
-			//cout << "(" << firstCost << "," << secondCost << "," << thirdCost << ")" << endl;
-			if(secondCost<firstCost& secondCost<thirdCost)//(imArrary2DR_result[j][i]==true)
-			leftImage->at<uchar>(j, i)=(uchar)255 ;
+			if(secondCost<firstCost& secondCost<thirdCost)
+				leftImage->at<uchar>(j, i)=(uchar)255 ;
 		}
 	}
+	stopInferenceResult = chrono::high_resolution_clock::now();
+
+	
+
+
+
+	//=======================================================================================================================================
+	//Memeory De-alocation.
+	//=======================================================================================================================================
 	
 	cudaFree(imArray1DL_d);
 	cudaFree(imArray1DR_d);
 	cudaFree(imArray1DResult_d);
-	chrono::high_resolution_clock::time_point stop = chrono::high_resolution_clock::now();
+	delete imArray2DL;
+	delete imArray2DR;
+	delete imArrary2DR_result;
+	delete imArrary1DL;
+	delete imArrary1DR;
+	delete imArrary1DR_result;
 
-	std::chrono::duration<double, std::milli> duration = (stop - start);;
-	auto value = duration.count();
-	string duration_s = to_string(value);
-	cout << "time of run is " << value << endl;
-	imshow(" Left  !!!   .....", *leftImage);
-	imwrite("test.png", *leftImage);
-	imshow("After effect right image !!!   .....", *rightImage);
+	
 
+
+
+
+
+	//=======================================================================================================================================
+	//Reporting the results.
+	//=======================================================================================================================================
+	durationReadImage = stopTimeReadImage - startTimeReadImage;
+	durationConvertTo1D= stopConvertTo1D- startConvertTo1D;
+	durationCudaMemcpyInput= stopCudaMemcpyInput- startCudaMemcpyInput;
+	durationCudaCalc = stopCudaCalc - startCudaCalc;
+	durationCudaMemcpyResult = stopCudaMemcpyResult - startCudaMemcpyResult;
+	durationInferenceResult = stopInferenceResult - startInferenceResult;
+	totalDuraation = durationReadImage + durationConvertTo1D + durationCudaMemcpyInput +
+		durationCudaCalc + durationCudaMemcpyResult+ durationInferenceResult;
+
+	string durationReadImage_s = to_string(durationReadImage.count());
+	string durationConvertTo1D_s = to_string(durationConvertTo1D.count());
+	string durationCudaMemcpyInput_s = to_string(durationCudaMemcpyInput.count());
+	string durationCudaCalc_s = to_string(durationCudaCalc.count());
+	string durationCudaMemcpyResult_s = to_string(durationCudaMemcpyResult.count());
+	string durationInferenceResult_s = to_string(durationInferenceResult.count());
+	string totalDuraation_s = to_string(totalDuraation.count());
+
+	repotringResult.open("results.txt");
+	repotringResult << "durationReadImage = " << durationReadImage_s << endl;
+	repotringResult << "durationConvertTo1D = " << durationConvertTo1D_s << endl;
+	repotringResult << "durationCudaMemcpyInput = " << durationCudaMemcpyInput_s << endl;
+	repotringResult << "durationCudaCalc = " << durationCudaCalc_s << endl;
+	repotringResult << "durationCudaMemcpyResult = " << durationCudaMemcpyResult_s << endl;
+	repotringResult << "durationInferenceResult = " << durationInferenceResult_s << endl;
+	repotringResult << "totalDuraation = " << totalDuraation_s << endl;
+	repotringResult.close();
+
+
+
+
+	imshow(" Left after calaculation !!!", *leftImage);
+	imwrite("result.png", *leftImage);
+	imshow("Right image !!!   .....", *rightImage);
 	waitKey(1000);
-	//cout << int(imArray2DL[200][359]) << endl;
-
-
-
-
-
-
-
-
 	printf("\n \n \n  \t \t \t :)  ");
 	char str[80];
 	scanf("%79s", str);
 }
+
+
+
+
+//command for syncronization of thread.
+//cudaDeviceSynchronize();
+
+//copy data to 2d reasult image.
+	/*for (int i = 0; i < numOfColumns*numOfRows; i++) {
+		imArrary2DR_result[int(i / numOfColumns)][i%numOfColumns] = imArrary1DR_result[i];
+	}*/
