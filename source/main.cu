@@ -30,8 +30,7 @@ using namespace std;
 using namespace cv;
 
 
-int numOfColumnsResized;
-int numOfRowsResized = 0;
+bool crossCheck = true;
 int kernelSize = 16;
 int maxDisparity = 30;
 int selectedDisparity =5;
@@ -202,7 +201,8 @@ int main(void)
 	int firstCost;
 	int secondCost;
 	int thirdCost;
-
+	int fourthCost;
+	int fifthCost;
 	//Pointers for Memeory Alocation on GPU.
 	uchar* imArray1DL_d;
 	uchar* imArray1DR_d;
@@ -312,15 +312,34 @@ int main(void)
 	//Inference Results.
 	//=======================================================================================================================================
 	startInferenceResult = chrono::high_resolution_clock::now();
-	for (int j = 0; j < numOfRows; j++) {
-		for (int i = 0; i < numOfColumns; i++) {
-			firstCost = imArrary1DR_result[(j * numOfColumns + i)*3];
-			secondCost= imArrary1DR_result[(j * numOfColumns + i)*3+1];
-			thirdCost= imArrary1DR_result[(j * numOfColumns + i )* 3+2];
-			if(secondCost<firstCost& secondCost<thirdCost)
-				leftImage->at<uchar>(j, i)=(uchar)255 ;
+
+
+	if (!crossCheck) {
+		for (int j = 0; j < numOfRows; j++) {
+			for (int i = 0; i < numOfColumns; i++) {
+				firstCost = imArrary1DR_result[(j * numOfColumns + i) * 3];
+				secondCost = imArrary1DR_result[(j * numOfColumns + i) * 3 + 1];
+				thirdCost = imArrary1DR_result[(j * numOfColumns + i) * 3 + 2];
+				if (secondCost < firstCost & secondCost < thirdCost)
+					leftImage->at<uchar>(j, i) = (uchar)255;
+			}
 		}
 	}
+	else
+	{
+		for (int j = 1; j < numOfRows-1; j++) {
+			for (int i = 1; i < numOfColumns-1; i++) {
+				firstCost = imArrary1DR_result[(j * numOfColumns + i) * 3];
+				secondCost = imArrary1DR_result[(j * numOfColumns + i) * 3 + 1];
+				thirdCost = imArrary1DR_result[(j * numOfColumns + i) * 3 + 2];
+				fourthCost = imArrary1DR_result[(j * numOfColumns + i-1) * 3 + 1];
+				fifthCost = imArrary1DR_result[(j * numOfColumns + i+1) * 3 ];
+				if (secondCost < firstCost & secondCost < thirdCost & secondCost < fourthCost & secondCost < fifthCost)
+					rightImage->at<uchar>(j, i) = (uchar)255;
+			}
+		}
+	}
+	
 	stopInferenceResult = chrono::high_resolution_clock::now();
 
 	
@@ -366,8 +385,14 @@ int main(void)
 	string durationCudaMemcpyResult_s = to_string(durationCudaMemcpyResult.count());
 	string durationInferenceResult_s = to_string(durationInferenceResult.count());
 	string totalDuraation_s = to_string(totalDuraation.count());
-
+	string crossCheck_s;
+	if (crossCheck) { crossCheck_s = "CROSS CHECK IS ON. \n"; }
+	else
+	{
+		crossCheck_s = "CROSS CHECK IS OFF. \n";
+	}
 	repotringResult.open("results.txt");
+	repotringResult<< crossCheck_s << endl;
 	repotringResult << "durationReadImage = " << durationReadImage_s << endl;
 	repotringResult << "durationConvertTo1D = " << durationConvertTo1D_s << endl;
 	repotringResult << "durationCudaMemcpyInput = " << durationCudaMemcpyInput_s << endl;
@@ -380,9 +405,9 @@ int main(void)
 
 
 
-	imshow(" Left after calaculation !!!", *leftImage);
-	imwrite("result.png", *leftImage);
-	imshow("Right image !!!   .....", *rightImage);
+	imshow(" Left after calaculation !!!", *rightImage);
+	imwrite("result.png", *rightImage);
+	//imshow("Right image !!!   .....", *rightImage);
 	waitKey(1000);
 	printf("\n \n \n  \t \t \t :)  ");
 	char str[80];
