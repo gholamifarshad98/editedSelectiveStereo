@@ -109,7 +109,7 @@ int CalcCost(shared_ptr<Mat> leftImage_, shared_ptr<Mat> rightImage_, int row, i
 		for (int v = -int(kernelSize / 2); v <= int(kernelSize / 2); v++) {
 			// for error handeling.
 			if (column + u + disparity >= NCols) {
-				cout << "*****************************************************" << endl;
+				cout << "Error occur" << endl;
 			}
 			cost = cost + int(pow((leftImage_->at<uchar>(row + v, column + u) - (rightImage_->at<uchar>(row + v, column + u + disparity))), 2));
 		}
@@ -262,7 +262,6 @@ int main(void)
 			imArray2DR[j][i] = rightImage->at<uchar>(j, i);
 		}
 	}
-	
 	for (int i = 0; i < numOfColumns*numOfRows; i++) {
 		imArrary1DL[i] = imArray2DL[int(i / numOfColumns)][i%numOfColumns];
 		imArrary1DR[i] = imArray2DR[int(i / numOfColumns)][i%numOfColumns];
@@ -389,12 +388,6 @@ int main(void)
 	char str[80];
 	scanf("%79s", str);
 }
-
-
-
-
-//command for syncronization of thread.
-//cudaDeviceSynchronize();
 
 //copy data to 2d reasult image.
 	/*for (int i = 0; i < numOfColumns*numOfRows; i++) {
