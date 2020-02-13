@@ -35,6 +35,29 @@ int kernelSize = 16;
 int maxDisparity = 30;
 int selectedDisparity =5;
 
+__global__ void filter(int kSize ,int nC, bool* localMins_d, bool* localMinsFilterd_d)
+{
+	int cost;
+	//int PixelIndexU;
+	//int PixelIndexV;
+	//
+	//PixelIndexU = blockIdx.x + threadIdx.x;
+	//PixelIndexV = blockIdx.y + threadIdx.y;
+	//
+	cost = 0;
+	for (int i = 0; i < kSize; i++) {
+		for (int j = 0; j < kSize; j++)
+			if (localMins_d[i+blockIdx.x + nC * (j+ blockIdx.y)])
+				cost = cost + 1;
+	}
+	if (cost > 10) {
+		localMinsFilterd_d[blockIdx.x+int(kSize/2)+ nC * (blockIdx.y+int(kSize / 2))] = true;
+		//printf("yes!! \n");
+	}
+}
+
+
+
 
 __global__ void IDAS_Stereo_selective( int MxDisparity, int nC , int nSelected, uchar* leftIm, uchar* rightIm, int* resultIm)
 {
@@ -195,8 +218,9 @@ int main(void)
 	int** imArrary2DR_result;
 	uchar* imArrary1DL;
 	uchar* imArrary1DR;
+	bool* localMins;
+	bool* localMinsFilterd;
 	int* imArrary1DR_result;
-	
 	//Varaible for inference the results;
 	int firstCost;
 	int secondCost;
@@ -207,7 +231,8 @@ int main(void)
 	uchar* imArray1DL_d;
 	uchar* imArray1DR_d;
 	int* imArray1DResult_d;
-
+	bool* localMins_d;
+	bool* localMinsFilterd_d;
 
 
 
@@ -238,16 +263,19 @@ int main(void)
 	imArrary1DL = new uchar[numOfColumns * numOfRows];
 	imArrary1DR = new uchar[numOfColumns * numOfRows];
 	imArrary1DR_result = new int[numOfColumns * numOfRows * 3];
+	localMins = new bool[numOfColumns * numOfRows];
+	localMinsFilterd = new bool[numOfColumns * numOfRows];
 	
 	
 	cudaMalloc((void**)&imArray1DL_d, numOfColumns * numOfRows * sizeof(uchar));
 	cudaMalloc((void**)&imArray1DR_d, numOfColumns * numOfRows * sizeof(uchar));
 	cudaMalloc((void**)&imArray1DResult_d, numOfColumns * numOfRows * 3 * sizeof(int));
-
+	cudaMalloc((void**)&localMins_d, numOfColumns * numOfRows * sizeof(bool));
+	cudaMalloc((void**)&localMinsFilterd_d, numOfColumns * numOfRows * sizeof(bool));
 	// Set grid and bolck size.
 	dim3 blocks3D(16, 16, 1);
 	dim3 grid2D(numOfColumns - 2 * (maxDisparity + 1) - (kernelSize - 1), numOfRows - kernelSize - 1, 3);
-
+	dim3 grid2D_filterimg(numOfColumns - kernelSize - 1, numOfRows - kernelSize - 1, 1);
 
 
 
@@ -334,13 +362,34 @@ int main(void)
 				thirdCost = imArrary1DR_result[(j * numOfColumns + i) * 3 + 2];
 				fourthCost = imArrary1DR_result[(j * numOfColumns + i-1) * 3 + 1];
 				fifthCost = imArrary1DR_result[(j * numOfColumns + i+1) * 3 ];
-				if (secondCost < firstCost & secondCost < thirdCost & secondCost < fourthCost & secondCost < fifthCost)
-					rightImage->at<uchar>(j, i) = (uchar)255;
+				if (secondCost < firstCost & secondCost < thirdCost & secondCost < fourthCost & secondCost < fifthCost) {
+					//rightImage->at<uchar>(j, i) = (uchar)255;
+					localMins[i + j * numOfColumns] = true;
+				}
+				else {
+					localMins[i + j * numOfColumns] = false;
+				}
 			}
 		}
 	}
-	
+
+	cudaMemcpy(localMins_d, localMins, numOfColumns * numOfRows * sizeof(bool), cudaMemcpyHostToDevice);
+
+	filter << <grid2D_filterimg, blocks3D >>> (kernelSize, numOfColumns, localMins_d, localMinsFilterd_d);
+
+	cudaMemcpy(localMinsFilterd, localMinsFilterd_d, numOfColumns * numOfRows * sizeof(bool), cudaMemcpyDeviceToHost);
+
+	for (int j = 0; j < numOfRows; j++) {
+		for (int i = 0; i < numOfColumns ; i++) {
+			if (localMinsFilterd[i+numOfColumns*j]){
+				rightImage->at<uchar>(j, i) = (uchar)255;
+			}
+		}
+	}
+
+
 	stopInferenceResult = chrono::high_resolution_clock::now();
+
 
 	
 
