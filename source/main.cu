@@ -35,34 +35,21 @@ int kernelSize = 16;
 int maxDisparity = 30;
 int selectedDisparity =5;
 
-__global__ void filter(int kSize ,int nC, bool* localMins_d, bool* localMinsFilterd_d)
+__global__ void filter(int kSize ,int nC, bool* input, bool* output)
 {
 	int cost;
-	//int PixelIndexU;
-	//int PixelIndexV;
-	//
-	//PixelIndexU = blockIdx.x + threadIdx.x;
-	//PixelIndexV = blockIdx.y + threadIdx.y;
-	//
 	cost = 0;
 	for (int i = 0; i < kSize; i++) {
 		for (int j = 0; j < kSize; j++)
-			if (localMins_d[i+blockIdx.x + nC * (j+ blockIdx.y)])
+			if (input[i+blockIdx.x + nC * (j+ blockIdx.y)])
 				cost = cost + 1;
 	}
 	if (cost > 10) {
-		localMinsFilterd_d[blockIdx.x+int(kSize/2)+ nC * (blockIdx.y+int(kSize / 2))] = true;
-		//printf("yes!! \n");
+		output[blockIdx.x+int(kSize/2)+ nC * (blockIdx.y+int(kSize / 2))] = true;
 	}
 }
-
-
-
-
 __global__ void IDAS_Stereo_selective( int MxDisparity, int nC , int nSelected, uchar* leftIm, uchar* rightIm, int* resultIm)
 {
-	//thread_group my_block = this_thread_block();
-	//thread_block block = this_thread_block();
 	__shared__   int costs;
 	__shared__   int dif[16 * 16];
 	int kSize = 16;
@@ -189,9 +176,28 @@ int main(void)
 	chrono::high_resolution_clock::time_point stopCudaMemcpyResult;
 	std::chrono::duration<double, std::milli> durationCudaMemcpyResult;
 
-	chrono::high_resolution_clock::time_point startInferenceResult;
-	chrono::high_resolution_clock::time_point stopInferenceResult;
-	std::chrono::duration<double, std::milli> durationInferenceResult;
+	chrono::high_resolution_clock::time_point startInferenceResult_CrossCheck;
+	chrono::high_resolution_clock::time_point stopInferenceResult_CrossCheck;
+	std::chrono::duration<double, std::milli> durationInferenceResult_CrossCheck;
+
+	chrono::high_resolution_clock::time_point startCudaMemcpyH2D_Filtering;
+	chrono::high_resolution_clock::time_point stopCudaMemcpyH2D_Filtering;
+	std::chrono::duration<double, std::milli> durationCudaMemcpyH2D_Filtering;
+
+	chrono::high_resolution_clock::time_point startCudaCalc_Filtering;
+	chrono::high_resolution_clock::time_point stopCudaCalc_Filtering;
+	std::chrono::duration<double, std::milli> durationCudaCalc_Filtering;
+
+
+	chrono::high_resolution_clock::time_point startCudaMemcpyD2H_Filtering;
+	chrono::high_resolution_clock::time_point stopCudaMemcpyD2H_Filtering;
+	std::chrono::duration<double, std::milli> durationCudaMemcpyD2H_Filtering;
+
+	chrono::high_resolution_clock::time_point startWrite_Filtering;
+	chrono::high_resolution_clock::time_point stopWrite_Filtering;
+	std::chrono::duration<double, std::milli> durationWrite_Filtering;
+
+
 	std::chrono::duration<double, std::milli> totalDuraation;
 
 
@@ -275,7 +281,7 @@ int main(void)
 	// Set grid and bolck size.
 	dim3 blocks3D(16, 16, 1);
 	dim3 grid2D(numOfColumns - 2 * (maxDisparity + 1) - (kernelSize - 1), numOfRows - kernelSize - 1, 3);
-	dim3 grid2D_filterimg(numOfColumns - kernelSize - 1, numOfRows - kernelSize - 1, 1);
+	dim3 grid2D_filtering(numOfColumns - kernelSize - 1, numOfRows - kernelSize - 1, 1);
 
 
 
@@ -339,9 +345,7 @@ int main(void)
 	//=======================================================================================================================================
 	//Inference Results.
 	//=======================================================================================================================================
-	startInferenceResult = chrono::high_resolution_clock::now();
-
-
+	startInferenceResult_CrossCheck = chrono::high_resolution_clock::now();
 	if (!crossCheck) {
 		for (int j = 0; j < numOfRows; j++) {
 			for (int i = 0; i < numOfColumns; i++) {
@@ -372,13 +376,27 @@ int main(void)
 			}
 		}
 	}
+	stopInferenceResult_CrossCheck = chrono::high_resolution_clock::now();
 
+
+
+	//=======================================================================================================================================
+	//Filtering Results --> Bilateral Filter.
+	//=======================================================================================================================================
+
+	startCudaMemcpyH2D_Filtering= chrono::high_resolution_clock::now();
 	cudaMemcpy(localMins_d, localMins, numOfColumns * numOfRows * sizeof(bool), cudaMemcpyHostToDevice);
+	stopCudaMemcpyH2D_Filtering= chrono::high_resolution_clock::now();
 
-	filter << <grid2D_filterimg, blocks3D >>> (kernelSize, numOfColumns, localMins_d, localMinsFilterd_d);
+	startCudaCalc_Filtering= chrono::high_resolution_clock::now();
+	filter <<<grid2D_filtering, blocks3D >>> (kernelSize, numOfColumns, localMins_d, localMinsFilterd_d);
+	stopCudaCalc_Filtering= chrono::high_resolution_clock::now();
 
+	startCudaMemcpyD2H_Filtering = chrono::high_resolution_clock::now();
 	cudaMemcpy(localMinsFilterd, localMinsFilterd_d, numOfColumns * numOfRows * sizeof(bool), cudaMemcpyDeviceToHost);
+	stopCudaMemcpyD2H_Filtering = chrono::high_resolution_clock::now();
 
+	startWrite_Filtering = chrono::high_resolution_clock::now();
 	for (int j = 0; j < numOfRows; j++) {
 		for (int i = 0; i < numOfColumns ; i++) {
 			if (localMinsFilterd[i+numOfColumns*j]){
@@ -386,13 +404,9 @@ int main(void)
 			}
 		}
 	}
-
-
-	stopInferenceResult = chrono::high_resolution_clock::now();
-
+	stopWrite_Filtering = chrono::high_resolution_clock::now();
 
 	
-
 
 
 	//=======================================================================================================================================
@@ -402,13 +416,16 @@ int main(void)
 	cudaFree(imArray1DL_d);
 	cudaFree(imArray1DR_d);
 	cudaFree(imArray1DResult_d);
+	cudaFree(localMins_d);
+	cudaFree(localMinsFilterd_d);
 	delete imArray2DL;
 	delete imArray2DR;
 	delete imArrary2DR_result;
 	delete imArrary1DL;
 	delete imArrary1DR;
 	delete imArrary1DR_result;
-
+	delete localMins;
+	delete localMinsFilterd;
 	
 
 
@@ -423,16 +440,34 @@ int main(void)
 	durationCudaMemcpyInput= stopCudaMemcpyInput- startCudaMemcpyInput;
 	durationCudaCalc = stopCudaCalc - startCudaCalc;
 	durationCudaMemcpyResult = stopCudaMemcpyResult - startCudaMemcpyResult;
-	durationInferenceResult = stopInferenceResult - startInferenceResult;
+	durationInferenceResult_CrossCheck = stopInferenceResult_CrossCheck - startInferenceResult_CrossCheck;
+
+	
+	  
+	durationCudaMemcpyH2D_Filtering = stopCudaMemcpyH2D_Filtering - startCudaMemcpyH2D_Filtering;
+	durationCudaCalc_Filtering= stopCudaCalc_Filtering- startCudaCalc_Filtering;
+	durationCudaMemcpyD2H_Filtering= stopCudaMemcpyD2H_Filtering- startCudaMemcpyD2H_Filtering;
+	durationWrite_Filtering = stopWrite_Filtering - startWrite_Filtering;
+
+
+
 	totalDuraation = durationReadImage + durationConvertTo1D + durationCudaMemcpyInput +
-		durationCudaCalc + durationCudaMemcpyResult+ durationInferenceResult;
+		durationCudaCalc + durationCudaMemcpyResult+ durationInferenceResult_CrossCheck+
+		durationCudaMemcpyH2D_Filtering+ durationCudaCalc_Filtering+ durationCudaMemcpyD2H_Filtering+ durationWrite_Filtering;
 
 	string durationReadImage_s = to_string(durationReadImage.count());
 	string durationConvertTo1D_s = to_string(durationConvertTo1D.count());
 	string durationCudaMemcpyInput_s = to_string(durationCudaMemcpyInput.count());
 	string durationCudaCalc_s = to_string(durationCudaCalc.count());
 	string durationCudaMemcpyResult_s = to_string(durationCudaMemcpyResult.count());
-	string durationInferenceResult_s = to_string(durationInferenceResult.count());
+	string durationInferenceResult_CrossCheck_s = to_string(durationInferenceResult_CrossCheck.count());
+
+	// Added for reporting the filtering proceess.
+	string durationCudaMemcpyH2D_Filtering_s = to_string(durationCudaMemcpyH2D_Filtering.count());
+	string durationCudaCalc_Filtering_s = to_string(durationCudaCalc_Filtering.count());
+	string durationCudaMemcpyD2H_Filtering_s = to_string(durationCudaMemcpyD2H_Filtering.count());
+	string durationWrite_Filtering_s = to_string(durationWrite_Filtering.count());
+
 	string totalDuraation_s = to_string(totalDuraation.count());
 	string crossCheck_s;
 	if (crossCheck) { crossCheck_s = "CROSS CHECK IS ON. \n"; }
@@ -447,11 +482,16 @@ int main(void)
 	repotringResult << "durationCudaMemcpyInput = " << durationCudaMemcpyInput_s << endl;
 	repotringResult << "durationCudaCalc = " << durationCudaCalc_s << endl;
 	repotringResult << "durationCudaMemcpyResult = " << durationCudaMemcpyResult_s << endl;
-	repotringResult << "durationInferenceResult = " << durationInferenceResult_s << endl;
+	repotringResult << "durationInferenceResult_CrossCheck = " << durationInferenceResult_CrossCheck_s << endl;
+
+	// Added for reporting the filtering proceess.
+	repotringResult << "durationCudaMemcpyH2D_Filtering = " << durationCudaMemcpyH2D_Filtering_s << endl;
+	repotringResult << "durationCudaCalc_Filtering = " << durationCudaCalc_Filtering_s << endl;
+	repotringResult << "durationCudaMemcpyD2H_Filtering = " << durationCudaMemcpyD2H_Filtering_s << endl;
+	repotringResult << "durationWrite_Filtering_ = " << durationWrite_Filtering_s << endl;
+
 	repotringResult << "totalDuraation = " << totalDuraation_s << endl;
 	repotringResult.close();
-
-
 
 
 	imshow(" Left after calaculation !!!", *rightImage);
@@ -462,8 +502,3 @@ int main(void)
 	char str[80];
 	scanf("%79s", str);
 }
-
-//copy data to 2d reasult image.
-	/*for (int i = 0; i < numOfColumns*numOfRows; i++) {
-		imArrary2DR_result[int(i / numOfColumns)][i%numOfColumns] = imArrary1DR_result[i];
-	}*/
