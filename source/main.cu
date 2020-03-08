@@ -35,18 +35,30 @@ int kernelSize = 16;
 int maxDisparity = 30;
 int selectedDisparity =5;
 
-__global__ void filter(int kSize ,int nC, bool* input, bool* output)
+__global__ void filter(int kSize, int nC, bool* input, bool* output)
 {
 	int cost;
 	cost = 0;
+	__shared__ bool temp;
+	temp = false;
+	if (threadIdx.x == 0 & threadIdx.y == 0) {
+		
+		
+	}
 	for (int i = 0; i < kSize; i++) {
-		for (int j = 0; j < kSize; j++)
-			if (input[i+blockIdx.x + nC * (j+ blockIdx.y)])
+		for (int j = 0; j < kSize; j++) {
+			if (input[i + blockIdx.x + nC * (j + blockIdx.y)])
 				cost = cost + 1;
+		}
 	}
 	if (cost > 10) {
-		output[blockIdx.x+int(kSize/2)+ nC * (blockIdx.y+int(kSize / 2))] = true;
+		temp = true;
+		//output[blockIdx.x+int(kSize/2)+ nC * (blockIdx.y+int(kSize / 2))] = true;
 	}
+	
+
+	output[blockIdx.x + int(kSize / 2) + nC * (blockIdx.y + int(kSize / 2))] = temp;
+	
 }
 __global__ void IDAS_Stereo_selective( int MxDisparity, int nC , int nSelected, uchar* leftIm, uchar* rightIm, int* resultIm)
 {
@@ -280,6 +292,7 @@ int main(void)
 	cudaMalloc((void**)&localMinsFilterd_d, numOfColumns * numOfRows * sizeof(bool));
 	// Set grid and bolck size.
 	dim3 blocks3D(16, 16, 1);
+	dim3 blocks3D_filtter(1, 1, 1);
 	dim3 grid2D(numOfColumns - 2 * (maxDisparity + 1) - (kernelSize - 1), numOfRows - kernelSize - 1, 3);
 	dim3 grid2D_filtering(numOfColumns - kernelSize - 1, numOfRows - kernelSize - 1, 1);
 
@@ -325,6 +338,7 @@ int main(void)
 	//=======================================================================================================================================
 	startCudaCalc = chrono::high_resolution_clock::now();
 	IDAS_Stereo_selective <<<grid2D, blocks3D >>>(maxDisparity, numOfColumns, selectedDisparity, imArray1DL_d, imArray1DR_d, imArray1DResult_d);
+	cudaDeviceSynchronize();
 	stopCudaCalc = chrono::high_resolution_clock::now();
 	
 	
@@ -389,7 +403,8 @@ int main(void)
 	stopCudaMemcpyH2D_Filtering= chrono::high_resolution_clock::now();
 
 	startCudaCalc_Filtering= chrono::high_resolution_clock::now();
-	filter <<<grid2D_filtering, blocks3D >>> (kernelSize, numOfColumns, localMins_d, localMinsFilterd_d);
+	filter <<<grid2D_filtering, blocks3D_filtter >>> (kernelSize, numOfColumns, localMins_d, localMinsFilterd_d);
+	cudaDeviceSynchronize();
 	stopCudaCalc_Filtering= chrono::high_resolution_clock::now();
 
 	startCudaMemcpyD2H_Filtering = chrono::high_resolution_clock::now();
